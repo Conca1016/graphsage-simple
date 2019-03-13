@@ -1,6 +1,6 @@
 # Reference PyTorch GraphSAGE Implementation
 ### Author: William L. Hamilton
-### Modified: Chevy
+### Modified: Chevy Deng
 
 
 Basic reference PyTorch implementation of [GraphSAGE](https://github.com/williamleif/GraphSAGE).
