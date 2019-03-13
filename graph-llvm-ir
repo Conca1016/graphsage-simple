@@ -1,0 +1,366 @@
+#!/usr/bin/env python
+import sys
+import os
+import optparse
+from pprint import pprint
+from llvm.core import *
+import llvm
+
+
+#USE_CLUSTERS = 0
+CLUSTER_EDGES = 0
+INV_NODES = 0
+#EXPLICIT_CONTROL = 0
+#CONTROL_BETWEEN_DATAFLOW_TREES = 1
+
+
+tmp_i = 1
+def number_tmps(mod):
+    """This function establishes explicit names for nameless numeric
+    temporaries in IR. It also should give human-readable IDs to each
+    statement in IR. Actually, as this is SSA, it uses result temporary
+    name as an ID for statement. And fails here, because void-typed
+    statements do not allow to set temporary name. So, this needs rework,
+    and so far worked around during graph construction.
+    """
+    global tmp_i
+    for f in mod.functions:
+#        print `f`
+        for b in f.basic_blocks:
+#            print "BB name:", b.name
+            for i in b.instructions:
+#                print "inst name",  i.name, "type", i.type
+                if not i.name and i.type != Type.void():
+                    #i.name = "t%d" % tmp_i + " " + i.name
+                    tmp_i += 1
+
+
+
+class Graph:
+
+    def __init__(self, f, out, options):
+        self.f = f
+        self.out = out
+        self.options = options
+        self.edges = []
+        self.anon_bblock_cnt = 0
+        self.anon_bblock_names = {}
+        self.void_instr_cnt = 0
+        self.void_instr_names = {}
+        self.inst_types = { 
+                            "add": 3,
+                            "sub": 4,
+                            "mul": 5,
+                            "shl": 6,
+                            "trunc":7,
+                            "zext":8,
+                            "or":9,
+                            "and":10,
+                            "store":11,
+                            "function":12,
+                            "ret": 13,
+                            "const": 2,
+                            "call": 0, #load
+                            "getelementptr": 1 #output
+                           }     
+        '''
+                            "_ssdm_op_SpecBitsMap":0,
+                            "_ssdm_op_Read.ap_auto.i16": 1,
+                            "llvm.dbg.value":2,
+                            "_ssdm_op_SpecTopModule":3,
+                            "_ssdm_op_SpecLatency":4,
+                            "":5,
+                            "call": 6,
+                            "getelementptr":7,
+                            "constant":10,
+                            "variable":11,
+                            "function":12,
+                            "metadata":13
+        '''
+        self.inst_index_cnt = -1
+        self.inst_indexes = {}
+        '''
+                            
+                            "_ssdm_op_SpecBitsMap":0,
+                            "_ssdm_op_Read.ap_auto.i16": 1,
+                            "llvm.dbg.value":2,
+                            "_ssdm_op_SpecTopModule":3,
+                            "_ssdm_op_SpecLatency":4,
+                            "":5,
+        '''   
+        self.nodes = {}
+        self.edge_list = []
+        
+    def write(self, line=""):
+        self.out.write(line + "\n")
+
+    def start_graph(self):
+        self.write("digraph G {")
+        self.write("compound=true")
+        if self.options.dag_control:
+            self.write("rankdir=BT")
+        if self.options.block_edges and not self.options.block_edges_helpers:
+            # If we use cluster edges w/o intervening nodes, we need to bump
+            # rank (vertical) separation, because otherwise there's very
+            # little vert. space left to render edges after cutting out
+            # cluster rectangle
+            self.write("ranksep=1")
+        self.write('label="Black edges - dataflow, red edges - control flow"')
+
+    def edge(self, fro, to, extra=""):
+        self.edges.append("\"%s\" -> \"%s\"%s" % (fro, to, extra))
+    def keep_edges(self, fro, to):
+        self.edge_list.append((fro, to))
+    def keep_nodes(self, n, t):
+        if n not in self.nodes:
+            self.nodes[n] = t
+          
+
+    def block_name(self, b):
+        """Returns basic block name, i.e. its entry label, or made name
+        if label if absent."""
+        if b.name:
+            return b.name
+        if b in self.anon_bblock_names:
+            return self.anon_bblock_names[b]
+        self.anon_bblock_cnt += 1
+        n = "unk_block_%d" % self.anon_bblock_cnt
+        self.anon_bblock_names[b] = n
+        return n
+
+    def instr_name(self, i):
+        """Returns instruction name, for which result variable name is used.
+        If result variable name is absent (void statement), make up name.
+        """
+        if i in self.void_instr_names:
+            return self.void_instr_names[i]
+        n = i.name
+        if not n:
+            self.void_instr_cnt += 1
+            n = "%d" % self.void_instr_cnt
+            self.void_instr_names[i] = n
+        return n
+    def instr_index(self, n):
+        if n in self.inst_indexes:
+            return self.inst_indexes[n]
+        else:
+            self.inst_index_cnt += 1
+            self.inst_indexes[n] = self.inst_index_cnt
+            return self.inst_indexes[n]
+    
+    def declare_clusters(self, f):
+        if self.options.block:
+            # Pre-allocate label nodes to subgraphs, otherwise Graphviz puts them to wrong subgraphs
+                for b in f.basic_blocks:
+                    name = self.block_name(b)
+#                    if not self.options.block_edges_helpers:
+                    if 1:
+                        self.write("subgraph \"cluster_%s\" {" % name)
+                    #if not self.options.block_edges:
+                    #    self.write('\"%s\" [label="label: \'%s\'"]' % (name, name))
+                    elif self.options.block_edges_helpers:
+                        self.write('\"%s\" [shape=point height=0.02 width=0.02 color=red fixedsize=true]' % name)
+
+#                    if not self.options.block_edges_helpers:
+                    if 1:
+                        self.write("}")
+                self.write()
+
+
+    def render(self):
+          self.start_graph()
+        
+          self.declare_clusters(f)
+          for b in f.basic_blocks:
+              block_name = self.block_name(b)
+              #print "bname", block_name # 'entry' for ssdm_op
+              self.edges = []
+              if self.options.block:
+                  self.write("subgraph \"cluster_%s\" {" % block_name)
+                  self.write("label=%s" % block_name)
+              '''
+              if not self.options.block_edges or self.options.block_edges_helpers:
+                  attr = "[color=red]"
+                  if b.name == "entry":
+                      attr += "[weight=5]"
+                  if self.options.block_edges:
+                      attr += "[lhead=\"cluster_%s\"]" % block_name
+                  if self.options.control:
+                      #print b.instructions[0]
+                      n = self.instr_name(b.instructions[0])
+                      n = self.instr_index(n)
+                      if b.instructions[0].name == "":#void instruction
+                          self.edge(block_name, n, attr)
+                      else:
+                          self.edge(block_name, b.instructions[0].name, attr)
+              '''
+              if self.options.dag_control:
+                  last_void_inst = block_name
+                  for i in b.instructions:
+                      if i.type == Type.void():
+                          n = self.instr_name(i)
+                          n = self.instr_index(n)
+                          self.edge(n, last_void_inst, "[color=blue dir=back]")
+                          last_void_inst = n
+
+              last_inst_name = None
+              for i in b.instructions:
+                if not (i.type == Type.void() and i.opcode_name == 'call' or i.opcode_name == 'ret'):
+                  print i.opcode_name,"-> ",i
+                  print i.type
+                  name = self.instr_name(i)
+                  n = self.instr_index(name)
+                  t = self.inst_types[i.opcode_name]
+                  if i.opcode_name == 'getelementptr' :
+                      self.write('\"%s\" [label="%s"]' % (n, str(n)+" "+str(t)+" "+i.operands[0].name) )
+                  elif i.opcode_name == 'call':
+                      l = len(i.operands)
+                      if i.operands[l-1].name == '_ssdm_op_Read.ap_auto.i16':
+                          self.write('\"%s\" [label="%s"]' % (n, str(n)+" "+str(t)+" "+i.operands[0].name) )
+                      else:
+                          t = self.inst_types['function']
+                          self.write('\"%s\" [label="%s"]' % (n, str(n)+" "+str(t)+str(i) ))
+                  else:
+                      self.write('\"%s\" [label="%s"]' % (n, str(n)+" "+str(t)+str(i) ))
+                  self.keep_nodes(n, t)
+                  
+                  if self.options.control:
+                      if last_inst_name:
+                          self.edge(last_inst_name, n, "[color=red weight=2]")
+                         # self.keep_edges(last_inst_name, n)
+                  else:
+                      if i.opcode_name == "br" and len(i.operands) == 1:
+                          self.edge(last_inst_name, n, "[color=red]")
+                         # self.keep_edges(last_inst_name, n)
+
+                  for a in i.operands:
+                      print a.name
+                      print 't', t
+                      if t == self.inst_types['function'] or \
+                      not (i.opcode_name == 'call' or i.opcode_name == 'getelementptr') :
+                          '''
+                          if isinstance(a, Constant) and not a.name:
+                              continue
+                              val = a
+                              t=self.inst_types["constant"]
+                          else:
+                              val = a.name
+                              if val not in self.inst_types:
+                                  continue
+                                  if len(val) == 0: t = self.inst_types["metadata"]
+                                  elif len(val) < 5: t = self.inst_types["variable"]
+                                  else: t = self.inst_types["constant"]
+                              else:
+                                  t = self.inst_types[val]
+                                        
+                          arg_val = self.instr_index(val)
+                          self.keep_nodes(arg_val, t)
+                          '''
+                          arg_val = self.instr_index(a.name)
+                          print 'arg', a.name, arg_val
+                          t = self.inst_types["const"]
+                          keep_nodes = self.keep_nodes(arg_val, t)
+                          if i.opcode_name == "br" and type(a) is BasicBlock:
+                              # For jump targets, we jump from current node to label (arg)
+                              if self.options.block_edges and not self.options.block_edges_helpers:
+                                  arg_val = a.instructions[0].name
+                              attrs = "[color=red]"
+                              if self.options.block_edges:
+                                  attrs += "[color=red][lhead=\"cluster_%s\"][ltail=\"cluster_%s\"][weight=5]" % (a.name, block_name)
+                                  if self.options.block_edges_helpers:
+                                      attrs += "[arrowhead=none]"
+                              self.edge(n, arg_val, attrs)
+                              self.keep_edges(n, arg_val)
+                          else:
+                              # For data, flow is from operand to operation
+                              self.edge(arg_val, n)
+                              self.keep_edges(arg_val, n)
+                  last_inst_name = n
+              if self.options.block:
+                  self.write("}")
+              for e in self.edges:
+                  self.write(e)
+              self.write()
+          self.write("}")
+
+          # judge which class of each graph
+          child_dict = dict()
+          flag = 0
+          class_label = 'Normal'
+          print self.nodes
+          for (a, b) in self.edge_list:
+              child_dict[a] = b
+          for key in self.nodes:
+              if self.nodes[key] == 3 or self.nodes[key] == 4:  
+                if self.nodes[child_dict[key]] == 5:
+                  for x in self.nodes:
+                    if (x, key) in self.edge_list:
+                      if self.nodes[x] == 2:
+                          flag = 1 
+                  print key, child_dict[key], child_dict[child_dict[key]]                 
+                  if self.nodes[child_dict[child_dict[key]]] == 3 or self.nodes[child_dict[child_dict[key]]] == 4:
+                      if flag == 0:
+                          class_label = 'UnderEstimate'
+                  else:
+                      if flag == 1:
+                          class_label = 'OverEstimate'
+                          
+                          
+
+          with open(self.options.outdir+"/txt/"+\
+               self.f.name + ".txt", "w") as graph:
+              graph.write(self.f.name + "\n")
+              graph.write(class_label + "\n")
+              graph.write(str(len(self.nodes)) + "\n")
+              for key in self.nodes:
+                  graph.write(str(key)+" "+str(self.nodes[key])+"\n")
+              for (a, b) in self.edge_list:
+                  graph.write(str(a)+" "+str(b)+"\n")
+              #graph.write(class_label + "\n")
+
+
+if __name__ == "__main__":
+    optparser = optparse.OptionParser(usage="%prog <file.ll>")
+    optparser.add_option('-o', '--outdir',
+        default='llvm/',
+        help="store output graph.txt")
+    optparser.add_option('-b', '--block',
+        action="store_true", default=False,
+        help="draw basic blocks as clusters (%default)")
+    optparser.add_option('-c', '--control',
+        action="store_true", default=False,
+        help="draw explicit control flow based on instruction order (default)")
+    optparser.add_option('', '--dag-control',
+        action="store_true",
+        help="analyze DAGs in a basic block and draw implied control flow among them (consider using --no-control)")
+    optparser.add_option('', '--block-edges',
+        action="store_true", default=False,
+        help="(try to) draw inter-block edges between blocks, not between nodes")
+    optparser.add_option('', '--block-edges-helpers',
+        action="store_true", default=False,
+        help="Add Graphviz-specific hacks to produce better layout")
+
+    options, args = optparser.parse_args(sys.argv[1:])
+    if len(args) != 1:
+        optparser.error("Wrong number of arguments")
+
+    if not options.control and not options.dag_control:
+        options.control = True
+
+    if not os.path.exists(options.outdir):
+        os.makedirs(options.outdir)
+    if not os.path.exists(options.outdir+"/txt"):
+        os.makedirs(options.outdir+"/txt")
+    if not os.path.exists(options.outdir+"/dot"):
+        os.makedirs(options.outdir+"/dot")
+
+    with open(args[0]) as asm:
+        mod = Module.from_assembly(asm)
+    number_tmps(mod)
+    #print mod
+    for f in mod.functions:
+        if not f.is_declaration:
+            print("Writing %s.dot" % f.name)
+            with open(options.outdir+"/dot/"+f.name + ".dot", "w") as out:
+                g = Graph(f, out, options)
+                g.render()
