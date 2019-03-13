@@ -44,20 +44,29 @@ class MeanAggregator(nn.Module):
             samp_neighs = to_neighs
 
         if self.gcn:
+        # consider node itself
             samp_neighs = [samp_neigh + set([nodes[i]]) for i, samp_neigh in enumerate(samp_neighs)]
         unique_nodes_list = list(set.union(*samp_neighs))
         unique_nodes = {n:i for i,n in enumerate(unique_nodes_list)}
         mask = Variable(torch.zeros(len(samp_neighs), len(unique_nodes)))
+        
+        # select indecies of the nodes who are connected in the sample set
         column_indices = [unique_nodes[n] for samp_neigh in samp_neighs for n in samp_neigh]   
         row_indices = [i for i in range(len(samp_neighs)) for j in range(len(samp_neighs[i]))]
         mask[row_indices, column_indices] = 1
         if self.cuda:
             mask = mask.cuda()
+  
+        # normalization
         num_neigh = mask.sum(1, keepdim=True)
         mask = mask.div(num_neigh)
+ 
+        # select feature matrix of nodes in sample set
         if self.cuda:
             embed_matrix = self.features(torch.LongTensor(unique_nodes_list).cuda())
         else:
             embed_matrix = self.features(torch.LongTensor(unique_nodes_list))
+        
+        # message passing
         to_feats = mask.mm(embed_matrix)
         return to_feats

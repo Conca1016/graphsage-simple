@@ -46,5 +46,9 @@ class Encoder(nn.Module):
             combined = torch.cat([self_feats, neigh_feats], dim=1)
         else:
             combined = neigh_feats
+        #print neigh_feats.shape
+        #print self_feats.shape
+        #print combined.shape
         combined = F.relu(self.weight.mm(combined.t()))
+        #print combined.shape
         return combined

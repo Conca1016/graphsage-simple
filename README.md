@@ -1,5 +1,6 @@
 # Reference PyTorch GraphSAGE Implementation
 ### Author: William L. Hamilton
+### Modified: Chevy
 
 
 Basic reference PyTorch implementation of [GraphSAGE](https://github.com/williamleif/GraphSAGE).
@@ -14,6 +15,5 @@ pytorch >0.2 is required.
 
 #### Running examples
 
-Execute `python -m graphsage.model` to run the Cora example.
+Execute `python -m graphsage.model` to run the HLS example.
 It assumes that CUDA is not being used, but modifying the run functions in `model.py` in the obvious way can change this.
-There is also a pubmed example (called via the `run_pubmed` function in model.py).
