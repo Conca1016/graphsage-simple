@@ -38,20 +38,20 @@ class SupervisedGraphSage(nn.Module):
         self.xent = nn.MSELoss()
 
         self.weight = nn.Parameter(torch.FloatTensor(emb_dim, enc.embed_dim))
-        init.xavier_uniform(self.weight)
+        init.normal_(self.weight, mean=0, std=1)
         
-        #self.total_dim = emb_dim + hls_dim
+        self.total_dim = emb_dim + hls_dim
         #self.total_dim = hls_dim
-        self.total_dim = emb_dim
+        #self.total_dim = emb_dim
         self.weight1 = nn.Parameter(torch.FloatTensor(10, self.total_dim))
-        init.xavier_uniform(self.weight1)
+        init.normal_(self.weight1, mean=0, std=1)
         self.bn1 = nn.BatchNorm1d(10)      
   
         self.weight2 = nn.Parameter(torch.FloatTensor(1, 10))
-        init.xavier_uniform(self.weight2)
+        init.normal_(self.weight2, mean=0, std=1)
 
 
-    def forward(self, funct_names, funct_map):
+    def forward(self, funct_names, funct_map, embed=False):
         emb_list = []
         #print self.enc
         #print self.enc.base_model.aggregator(funct_map['7_136'])
@@ -64,21 +64,46 @@ class SupervisedGraphSage(nn.Module):
             emb_list.append(emb)
         embeds = torch.stack(emb_list)
         #print embeds
+        #graph_embeds = F.sigmoid(self.weight.mm(embeds.t()))
         graph_embeds = F.relu(self.weight.mm(embeds.t()))
         #graph_embeds = self.weight.mm(embeds.t())
         #print graph_embeds.shape
+        #graph_embeds = graph_embeds/(torch.max(torch.abs(graph_embeds)).item())
+        graph_embeds = graph_embeds/50
+        if embed:
+            embed_list = []
+            embed_name = []
+            for i in xrange(15):
+                embed_name.append("emb%d" % i)
+            embed_name.append("Design_Name")
+            embed_list.append(embed_name)
+            cnt = 0
+            for x in funct_names:
+                embed_entry = graph_embeds.t().tolist()[cnt] + [x]
+                embed_list.append(embed_entry)
+                cnt += 1
+            with open("emb.csv", "w") as ff:
+                writer = csv.writer(ff, delimiter = ',')
+                writer.writerows(embed_list)
+                
+        #print funct_names
+        #print graph_embeds.t()
+        
         return graph_embeds.t()
 
     def forward_fcn(self, hls_embs, funct_names, graph_embeds):
         hls_emb_list = []
         for x in funct_names:
-            hls_emb_list.append(torch.FloatTensor(np.asarray(hls_embs[x], dtype = float)))
+            hls_tensor = torch.FloatTensor(np.asarray(hls_embs[x], dtype = float))
+            hls_tensor = hls_tensor/69
+            #hls_tensor = hls_tensor/(torch.max(torch.abs(hls_tensor)).item())
+            hls_emb_list.append(hls_tensor)
         hls_embeds = torch.stack(hls_emb_list)
         #print hls_embeds
         #print hls_embeds, hls_embeds.shape, graph_embeds.shape
-        #total_embeds = torch.cat([graph_embeds, hls_embeds], dim=1)
+        total_embeds = torch.cat([graph_embeds, hls_embeds], dim=1)
         #total_embeds = hls_embeds
-        total_embeds = graph_embeds
+        #total_embeds = graph_embeds
         #print total_embeds
         #print self.weight
         #print self.weight1
@@ -143,27 +168,27 @@ def load_cora(num_nodes, num_feats, dataset_dir):
 def graph_forward(node_feat_dim, features, adj_lists0, adj_lists1, agg_sel=False):
     agg1_0 = MeanAggregator(features, cuda=False)
     agg1_1 = MeanAggregator(features, cuda=False)
-    enc1 = Encoder(features, node_feat_dim, 18, adj_lists0, adj_lists1, agg1_0, agg1_1, gcn=agg_sel, cuda=False)
+    enc1 = Encoder(features, node_feat_dim, 15, adj_lists0, adj_lists1, agg1_0, agg1_1, gcn=agg_sel, cuda=False)
 
     agg2_0 = MeanAggregator(lambda nodes : enc1(nodes).t(), cuda=False)
     agg2_1 = MeanAggregator(lambda nodes : enc1(nodes).t(), cuda=False)
-    enc2 = Encoder(lambda nodes : enc1(nodes).t(), enc1.embed_dim, 15, adj_lists0, adj_lists1, agg2_0, agg2_1,
+    enc2 = Encoder(lambda nodes : enc1(nodes).t(), enc1.embed_dim, 12, adj_lists0, adj_lists1, agg2_0, agg2_1,
             base_model=enc1, gcn=agg_sel, cuda=False)
 
     agg3_0 = MeanAggregator(lambda nodes : enc2(nodes).t(), cuda=False)
     agg3_1 = MeanAggregator(lambda nodes : enc2(nodes).t(), cuda=False)
     enc3 = Encoder(lambda nodes : enc2(nodes).t(), enc2.embed_dim, 12, adj_lists0, adj_lists1, agg3_0, agg3_1,
             base_model=enc2, gcn=agg_sel, cuda=False)
-    return enc1
+    return enc2
 
 def run_cora():
     np.random.seed(1)
     random.seed(1)
     ####num_mul = 100
     #print adj_lists1
-    num_nodes = 1800
-    node_feat_dim = 4
-    dataset_dir = "intel_dataset/"
+    num_nodes = 3597
+    node_feat_dim = 14
+    dataset_dir = "vivado_dataset/"
     feat_data, labels, adj_lists0, adj_lists1 = load_cora(num_nodes, node_feat_dim, dataset_dir)
     features = nn.Embedding(num_nodes, node_feat_dim)
     features.weight = nn.Parameter(torch.FloatTensor(feat_data), requires_grad=False)
@@ -190,28 +215,37 @@ def run_cora():
     enc3.num_samples = 5
     '''
    
-    emb_dim = 10
-    hls_dim = 4
-    hls_test_col = -6
+    emb_dim = 15
+    hls_dim = 1
+    hls_test_col = -3
     graphsage = SupervisedGraphSage(emb_dim, hls_dim, enc3)
 #    graphsage.cuda()
 
-    funct_name = []
+    funct_name_train = []
+    funct_name_test = []
     funct_map = dict()
-    with open(dataset_dir + "mulIndex.csv") as fp:
+    with open(dataset_dir + "mulIndexTest.csv") as fp:
         for i,line in enumerate(fp):
             node_set = []
             info = line.strip().split()
-            funct_name.append(info[-1]) 
+            funct_name_train.append(info[-1]) 
             for j in xrange(len(info)-1):
-                node_set.append(int(info[j])-1)
+                node_set.append(int(info[j]))
+            funct_map[info[-1]] = node_set
+    with open(dataset_dir + "mulIndexTrain.csv") as fp:
+        for i,line in enumerate(fp):
+            node_set = []
+            info = line.strip().split()
+            funct_name_test.append(info[-1]) 
+            for j in xrange(len(info)-1):
+                node_set.append(int(info[j]))
             funct_map[info[-1]] = node_set
     #print funct_name
     #print funct_map
     funct_hls_name = []
     hls_emb_map = dict()
     ground_truth = dict()
-    with open(dataset_dir + "hls_graphsage.csv") as ff:
+    with open(dataset_dir + "hls_train.csv") as ff:
         for i, line in enumerate(ff):
             hls_emb = []
             y = line.strip().split()
@@ -221,29 +255,49 @@ def run_cora():
             else:
                 funct_hls_name.append(info[-1])
                 for j in xrange(len(info)-1):
-                    if j < hls_dim:
+                    if j < 5+hls_dim and j > 4:
+                        hls_emb.append(float(info[j]))
+                hls_emb_map[info[-1]] = hls_emb
+                ground_truth[info[-1]] = float(info[hls_test_col])
+    with open(dataset_dir + "hls_test.csv") as ff:
+        for i, line in enumerate(ff):
+            hls_emb = []
+            y = line.strip().split()
+            info = y[0].replace(',', ' ').split()
+            if i == 0:
+                continue
+            else:
+                funct_hls_name.append(info[-1])
+                for j in xrange(len(info)-1):
+                    if j < 5+hls_dim and j > 4:
                         hls_emb.append(float(info[j]))
                 hls_emb_map[info[-1]] = hls_emb
                 ground_truth[info[-1]] = float(info[hls_test_col])
     #print funct_hls_name
     #print hls_emb_map
-    dataset_funct = []
-    for x in funct_name:
+    dataset_funct_train = []
+    dataset_funct_test = []
+    for x in funct_name_train:
         if x in funct_hls_name:
-            dataset_funct.append(x)
-    training_rate = 0.9
-    random.shuffle(dataset_funct)
-    train = dataset_funct[:int(len(dataset_funct) * training_rate)]
-    test = dataset_funct[int(len(dataset_funct) * training_rate):]
+            dataset_funct_train.append(x)
+    for x in funct_name_test:
+        if x in funct_hls_name:
+            dataset_funct_test.append(x)
+    ###training_rate = 0.9
+    ###random.shuffle(dataset_funct)
+    train = dataset_funct_train[:]
+    val_all = dataset_funct_test[:]
+    test = dataset_funct_test[:]
     #print train
     #print test
    
 
-    optimizer = torch.optim.SGD(filter(lambda p : p.requires_grad, graphsage.parameters()), lr=0.0001)
+    optimizer = torch.optim.SGD(filter(lambda p : p.requires_grad, graphsage.parameters()), lr=0.001)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[200, 400, 600], gamma=0.1)
     times = []
-    epoch = 100
+    epoch = 1000
     batch_size = 20
-    val_size = 20
+    val_size = 200
     val_ind_list = []
     num_batch = len(train)//batch_size
     index_list = []
@@ -253,6 +307,7 @@ def run_cora():
     for x in test:
         test_truth.append(ground_truth[x])
     for e in xrange(epoch):
+        scheduler.step()
         shuffle(train)
         for i in xrange(num_batch):
             #if i == 10:
@@ -276,15 +331,20 @@ def run_cora():
             #optimizer.zero_grad()
             #print graphsage.enc.weight.grad
             #print graphsage.weight.grad
-            print graphsage.weight1.grad
-            print graphsage.weight2.grad
+            #print graphsage.weight1.grad
+            #print graphsage.weight2.grad
             end_time = time.time()
             times.append(end_time-start_time)
+            val_truth = []
             if (i+e*num_batch) % val_size == 0:
-                test_loss = graphsage.loss(test, funct_map, hls_emb_map, Variable(torch.FloatTensor(np.asarray(test_truth))), len(test))
-                val_list.append(test_loss.item())
+                val = val_all[:]
+                for yy in val:
+                    val_truth.append(ground_truth[yy])
+                #random.shuffle(val_all)
+                val_loss = graphsage.loss(val, funct_map, hls_emb_map, Variable(torch.FloatTensor(np.asarray(val_truth))), len(val))
+                val_list.append(val_loss.item())
                 val_ind_list.append(i+e*num_batch)
-            #print batch, loss.item()
+                print 'validation loss:    ', val_loss.item()
     #print graphsage.training
     #print val_list
     lines = plt.plot(index_list, loss_list, val_ind_list, val_list)
@@ -293,7 +353,7 @@ def run_cora():
     plt.xlabel('batch')
     plt.ylabel('l2_loss')
     plt.legend(('Training loss', 'Validation loss'), loc='upper right')
-    plt.title('Prediction based on HLS')
+    plt.title('#LUTs Prediction based on HLS+Graph_Learning')
     plt.show()
     plt.savefig('training_loss.pdf')
 
@@ -307,6 +367,7 @@ def run_cora():
     print "Test l2 loss:", test_loss.item()
     print "Average batch time:", np.mean(times)
 
+    graph_embed = graphsage.forward(train+test, funct_map, embed=True)
      
     #test_output = graphsage.forward(test)
     #print "Test F1:", f1_score(labels[test], test_output.data.numpy().argmax(axis=1), average="micro")

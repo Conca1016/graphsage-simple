@@ -1,12 +1,12 @@
 import csv
 
-import sys
-
 import torch
 import torch.nn as nn
 from torch.nn import init
 from torch.autograd import Variable
 import torch.nn.functional as F
+
+import sys
 
 import numpy as np
 import time
@@ -32,44 +32,22 @@ on the Cora and Pubmed datasets.
 
 class SupervisedGraphSage(nn.Module):
 
-    def __init__(self, emb_dim, hls_dim, enc):
+    def __init__(self, hls_dim):
         super(SupervisedGraphSage, self).__init__()
-        self.enc = enc
         self.xent = nn.MSELoss()
-
-        self.weight = nn.Parameter(torch.FloatTensor(emb_dim, enc.embed_dim))
-        init.xavier_uniform(self.weight)
         
         #self.total_dim = emb_dim + hls_dim
-        #self.total_dim = hls_dim
-        self.total_dim = emb_dim
+        self.total_dim = hls_dim
+        #self.total_dim = emb_dim
         self.weight1 = nn.Parameter(torch.FloatTensor(10, self.total_dim))
-        init.xavier_uniform(self.weight1)
-        self.bn1 = nn.BatchNorm1d(10)      
-  
+        init.normal_(self.weight1, mean=0, std=5)
+        self.bn1 = nn.BatchNorm1d(10)        
+
         self.weight2 = nn.Parameter(torch.FloatTensor(1, 10))
-        init.xavier_uniform(self.weight2)
+        init.normal_(self.weight2, mean=0, std=5)
+        
 
-
-    def forward(self, funct_names, funct_map):
-        emb_list = []
-        #print self.enc
-        #print self.enc.base_model.aggregator(funct_map['7_136'])
-        for x in funct_names:
-            #print len(funct_map[x])
-            emb = self.enc(funct_map[x])
-            #print len(funct_map[x])
-            emb = torch.sum(emb, dim=1)
-            #print emb
-            emb_list.append(emb)
-        embeds = torch.stack(emb_list)
-        #print embeds
-        graph_embeds = F.relu(self.weight.mm(embeds.t()))
-        #graph_embeds = self.weight.mm(embeds.t())
-        #print graph_embeds.shape
-        return graph_embeds.t()
-
-    def forward_fcn(self, hls_embs, funct_names, graph_embeds):
+    def forward_fcn(self, hls_embs, funct_names):
         hls_emb_list = []
         for x in funct_names:
             hls_emb_list.append(torch.FloatTensor(np.asarray(hls_embs[x], dtype = float)))
@@ -77,24 +55,24 @@ class SupervisedGraphSage(nn.Module):
         #print hls_embeds
         #print hls_embeds, hls_embeds.shape, graph_embeds.shape
         #total_embeds = torch.cat([graph_embeds, hls_embeds], dim=1)
-        #total_embeds = hls_embeds
-        total_embeds = graph_embeds
+        total_embeds = hls_embeds
+        #total_embeds = graph_embeds
         #print total_embeds
         #print self.weight
-        #print self.weight1
-        #emb_1 = F.sigmoid(self.bn1(self.weight1.mm(total_embeds.t()).t()).t())
-        emb_1 = F.relu(self.weight1.mm(total_embeds.t()))
+        #print self.weight1.mm(total_embeds.t())
+        print "weight1:", self.weight1 
+        emb_1 = F.sigmoid(self.bn1(self.weight1.mm(total_embeds.t()).t()).t())
         #print emb_1
-        #print self.weight2
+        print "weight2", self.weight2
         emb_2 = self.weight2.mm(emb_1)
         #print emb_2
         return emb_2.t()
 
 
     def loss(self, funct_names, funct_map, hls_embs, ground_truth, data_size):
-        graph_embs = self.forward(funct_names, funct_map)
+        #graph_embs = self.forward(funct_names, funct_map)
         #print graph_embs
-        pred = self.forward_fcn(hls_embs, funct_names, graph_embs)
+        pred = self.forward_fcn(hls_embs, funct_names)
         #print pred
         #print scores.shape
         #print labels
@@ -140,36 +118,15 @@ def load_cora(num_nodes, num_feats, dataset_dir):
     return feat_data, labels, adj_lists0, adj_lists1
 
 
-def graph_forward(node_feat_dim, features, adj_lists0, adj_lists1, agg_sel=False):
-    agg1_0 = MeanAggregator(features, cuda=False)
-    agg1_1 = MeanAggregator(features, cuda=False)
-    enc1 = Encoder(features, node_feat_dim, 18, adj_lists0, adj_lists1, agg1_0, agg1_1, gcn=agg_sel, cuda=False)
-
-    agg2_0 = MeanAggregator(lambda nodes : enc1(nodes).t(), cuda=False)
-    agg2_1 = MeanAggregator(lambda nodes : enc1(nodes).t(), cuda=False)
-    enc2 = Encoder(lambda nodes : enc1(nodes).t(), enc1.embed_dim, 15, adj_lists0, adj_lists1, agg2_0, agg2_1,
-            base_model=enc1, gcn=agg_sel, cuda=False)
-
-    agg3_0 = MeanAggregator(lambda nodes : enc2(nodes).t(), cuda=False)
-    agg3_1 = MeanAggregator(lambda nodes : enc2(nodes).t(), cuda=False)
-    enc3 = Encoder(lambda nodes : enc2(nodes).t(), enc2.embed_dim, 12, adj_lists0, adj_lists1, agg3_0, agg3_1,
-            base_model=enc2, gcn=agg_sel, cuda=False)
-    return enc1
 
 def run_cora():
     np.random.seed(1)
     random.seed(1)
     ####num_mul = 100
     #print adj_lists1
-    num_nodes = 1800
-    node_feat_dim = 4
     dataset_dir = "intel_dataset/"
-    feat_data, labels, adj_lists0, adj_lists1 = load_cora(num_nodes, node_feat_dim, dataset_dir)
-    features = nn.Embedding(num_nodes, node_feat_dim)
-    features.weight = nn.Parameter(torch.FloatTensor(feat_data), requires_grad=False)
    # features.cuda()
     
-    enc3 = graph_forward(node_feat_dim, features, adj_lists0, adj_lists1)
     '''
     agg1 = MeanAggregator(features, cuda=True)
     enc1 = Encoder(features, 14, 18, adj_lists, agg1, gcn=False, cuda=False)
@@ -190,10 +147,9 @@ def run_cora():
     enc3.num_samples = 5
     '''
    
-    emb_dim = 10
-    hls_dim = 4
+    hls_dim = 1
     hls_test_col = -6
-    graphsage = SupervisedGraphSage(emb_dim, hls_dim, enc3)
+    graphsage = SupervisedGraphSage(hls_dim)
 #    graphsage.cuda()
 
     funct_name = []
@@ -239,9 +195,11 @@ def run_cora():
     #print test
    
 
-    optimizer = torch.optim.SGD(filter(lambda p : p.requires_grad, graphsage.parameters()), lr=0.0001)
+    optimizer = torch.optim.SGD(graphsage.parameters(), lr=0.01)
+    #optimizer = torch.optim.SGD(filter(lambda p : p.requires_grad, graphsage.parameters()), lr=0.0001)
+    #print filter(lambda p: p.requires_grad, graphsage.parameters())
     times = []
-    epoch = 100
+    epoch = 20
     batch_size = 20
     val_size = 20
     val_ind_list = []
@@ -255,8 +213,8 @@ def run_cora():
     for e in xrange(epoch):
         shuffle(train)
         for i in xrange(num_batch):
-            #if i == 10:
-                #sys.exit()
+            if i == 5:
+                sys.exit()
             batch_graphs = train[i*batch_size: i*batch_size + batch_size]
             sub_ground_truth = []
             for x in batch_graphs:
